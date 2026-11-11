@@ -640,20 +640,42 @@ Campeonato Baiano 2026 - PROTÓTIPO</textarea>
       }
     }
 
-    // Busca de CEP (ViaCEP)
-    function buscarCEP(cep) {
+    // Busca de CEP (ViaCEP) com preenchimento automático
+    async function buscarCEP(cep) {
       const cepLimpo = cep.replace(/\D/g, '');
-      // Renderiza as categorias garantindo que não apague caso venha vazio do Firestore
-      if (eventConfig.categorias && Array.isArray(eventConfig.categorias) && eventConfig.categorias.length > 0) {
+      if (cepLimpo.length !== 8) return;
+
+      try {
+        const response = await fetch(`https://viacep.com.br/ws/${cepLimpo}/json/`);
+        const data = await response.json();
+
+        if (!data.erro) {
+          document.getElementById('piloto_rua').value = data.logradouro || '';
+          document.getElementById('piloto_bairro').value = data.bairro || '';
+          document.getElementById('piloto_cidade').value = data.localidade || '';
+          document.getElementById('piloto_estado').value = data.uf || '';
+          document.getElementById('piloto_numero').focus(); // Foca no campo número para o usuário
+        } else {
+          alert("CEP não encontrado.");
+        }
+      } catch (err) {
+        console.warn("Erro ao buscar CEP:", err);
+      }
+
+      // Restaura/Garante as categorias dinâmicas caso venham do Firestore
+      const config = window.eventoAtualConfig;
+      if (config && config.categorias) {
         const catSelect = document.getElementById('categoria');
         const valorAtual = catSelect.value;
         catSelect.innerHTML = '<option value="">Selecione uma categoria...</option>';
-        eventConfig.categorias.forEach(cat => {
-          const opt = document.createElement('option');
-          opt.value = cat;
-          opt.innerText = cat;
-          if (cat === valorAtual) opt.selected = true;
-          catSelect.appendChild(opt);
+        config.categorias.split('\n').forEach(cat => {
+          if (cat.trim()) {
+            const opt = document.createElement('option');
+            opt.value = cat.trim();
+            opt.innerText = cat.trim();
+            if (cat.trim() === valorAtual) opt.selected = true;
+            catSelect.appendChild(opt);
+          }
         });
       }
     }
@@ -711,7 +733,7 @@ Campeonato Baiano 2026 - PROTÓTIPO</textarea>
     }
 
     // Mercado Pago Init
-    const PUBLIC_KEY = 'TEST-00000000-0000-0000-0000-000000000000';
+    const PUBLIC_KEY = 'APP_USR-0dc903cb-0dec-4f79-a7ad-dcd57ab98396';
 
     async function initMercadoPago() {
       if (PUBLIC_KEY.includes('00000000')) {

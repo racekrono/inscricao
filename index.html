@@ -133,11 +133,13 @@
     // Função Admin para salvar novas configurações do evento
     window.salvarConfiguracaoEventoAdmin = async function(novosDados) {
       try {
-        await setDoc(doc(db, "configuracao_evento", "atual"), novosDados);
+        const docRef = doc(db, "configuracao_evento", "atual");
+        await setDoc(docRef, novosDados, { merge: true });
         alert("Configurações do evento atualizadas no Firebase com sucesso!");
         window.carregarDadosEventoEInscricoes();
       } catch(e) {
-        alert("Erro ao salvar dados do evento: " + e.message);
+        console.error("Erro ao salvar no Firestore:", e);
+        alert("Erro ao salvar dados do evento: " + e.message + "\n\nVerifique se as Regras do Firestore permitem escrita.");
       }
     };
 
@@ -188,7 +190,7 @@
         <span class="bg-brand-blue text-white text-[10px] font-bold px-2 py-0.5 rounded">RALLY 4X4</span>
         <span class="text-gray-300">Organização: <strong>RC RACING</strong></span>
       </div>
-      <button onclick="togglePainelAdmin()" class="bg-slate-800 hover:bg-slate-700 text-amber-400 font-semibold px-3 py-1.5 rounded-lg text-[11px] transition flex items-center gap-1.5 border border-amber-500/30">
+      <button onclick="solicitarAcessoAdmin()" class="bg-slate-800 hover:bg-slate-700 text-amber-400 font-semibold px-3 py-1.5 rounded-lg text-[11px] transition flex items-center gap-1.5 border border-amber-500/30">
         <span>⚙️</span> Painel Admin / Gerenciar Evento
       </button>
     </div>
@@ -549,6 +551,26 @@ Campeonato Baiano 2026 - PROTÓTIPO</textarea>
   </footer>
 
   <script>
+    // Senha do Painel Admin
+    const ADMIN_PASSWORD = '75999862628';
+    let adminAutenticado = false;
+
+    function solicitarAcessoAdmin() {
+      if (adminAutenticado) {
+        togglePainelAdmin();
+        return;
+      }
+
+      const senhaInput = prompt("Digite a senha de administrador para acessar o painel:");
+      if (senhaInput === ADMIN_PASSWORD) {
+        adminAutenticado = true;
+        alert("Acesso liberado ao Painel Administrativo!");
+        togglePainelAdmin();
+      } else if (senhaInput !== null) {
+        alert("Senha incorreta! Acesso negado.");
+      }
+    }
+
     // Funções do Painel Admin
     function togglePainelAdmin() {
       const modal = document.getElementById('adminModal');

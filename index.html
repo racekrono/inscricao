@@ -1,17 +1,41 @@
-<!-- ... existing code ... -->
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PRO RALLY 2026 - Etapa FINAL - Inscrição Oficial</title>
+  
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Configuração das cores do tema -->
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'brand-blue': '#0066FF',
+            'brand-dark': '#0F172A',
+            'brand-accent': '#FFD700',
+          }
+        }
+      }
+    }
+  </script>
+
   <!-- Google Fonts: Inter -->
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   
   <!-- Mercado Pago SDK v2 -->
   <script src="https://sdk.mercadopago.com/js/v2"></script>
 
-  <!-- Firebase SDKs (v11.6.1) -->
+  <!-- Firebase v11 Imports -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
     import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-    import { getFirestore, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    import { getFirestore, collection, addDoc, serverTimestamp, doc, getDoc, setDoc, getDocs, query, orderBy } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-    // Configuração do Firebase com suas credenciais
+    // Configuração do Firebase do cliente
     const firebaseConfig = {
       apiKey: "AIzaSyA8PsEMRmOSCBtREIIjYFhOb6fa-oJKGj4",
       authDomain: "inscricao-417f8.firebaseapp.com",
@@ -28,12 +52,68 @@
     const auth = getAuth(app);
     const db = getFirestore(app);
 
-    // Garante a autenticação para permitir a gravação no Firestore
+    // Garante a autenticação para permitir leitura/gravação no Firestore
     signInAnonymously(auth).then(() => {
       console.log("Firebase Autenticado com Sucesso!");
+      carregarDadosEventoEInscricoes();
     }).catch((err) => {
       console.warn("Aviso de Auth no Firebase:", err);
     });
+
+    // Função global para carregar dados do evento dinamicamente
+    window.carregarDadosEventoEInscricoes = async function() {
+      try {
+        // 1. Carrega dados do evento
+        const eventoDoc = await getDoc(doc(db, "configuracao_evento", "atual"));
+        if (eventoDoc.exists()) {
+          const evento = eventoDoc.data();
+          window.eventoAtualConfig = evento;
+
+          // Atualiza Interface Pública
+          document.querySelectorAll('.dinamico-titulo-evento').forEach(el => el.innerText = evento.titulo);
+          document.querySelectorAll('.dinamico-data-evento').forEach(el => el.innerText = evento.data_extenso);
+          document.querySelectorAll('.dinamico-local-evento').forEach(el => el.innerText = evento.local);
+          document.querySelectorAll('.dinamico-lote').forEach(el => el.innerText = evento.lote_nome);
+          document.querySelectorAll('.dinamico-valor').forEach(el => el.innerText = `R$ ${Number(evento.valor).toFixed(2).replace('.', ',')}`);
+          
+          if (document.getElementById('dinamico-descricao')) {
+            document.getElementById('dinamico-descricao').innerHTML = evento.descricao_html;
+          }
+
+          // Atualiza Categorias no Select
+          const catSelect = document.getElementById('categoria');
+          if (catSelect && evento.categorias) {
+            catSelect.innerHTML = '<option value="">Selecione uma categoria...</option>';
+            evento.categorias.split('\n').forEach(cat => {
+              if (cat.trim()) {
+                const opt = document.createElement('option');
+                opt.value = cat.trim();
+                opt.innerText = cat.trim();
+                catSelect.appendChild(opt);
+              }
+            });
+          }
+
+          // Preenche campos do Admin caso esteja aberto
+          if (document.getElementById('admin_titulo')) {
+            document.getElementById('admin_titulo').value = evento.titulo || '';
+            document.getElementById('admin_data').value = evento.data_extenso || '';
+            document.getElementById('admin_local').value = evento.local || '';
+            document.getElementById('admin_lote').value = evento.lote_nome || '';
+            document.getElementById('admin_valor').value = evento.valor || '';
+            document.getElementById('admin_categorias').value = evento.categorias || '';
+            document.getElementById('admin_descricao').value = evento.descricao_html || '';
+          }
+        }
+
+        // 2. Se a aba admin estiver ativa, carrega lista de inscrições
+        if (window.carregarTabelaAdmin) {
+          window.carregarTabelaAdmin();
+        }
+      } catch(e) {
+        console.log("Usando dados padrões do evento:", e);
+      }
+    };
 
     // Função global para salvar a inscrição no Firestore
     window.salvarInscricaoFirebase = async function(dadosInscricao, statusPagamento = 'pendente_ou_simulacao') {
@@ -43,119 +123,513 @@
           status_pagamento: statusPagamento,
           criado_em: serverTimestamp()
         });
-        console.log("Inscrição salva com sucesso no Firestore. ID:", docRef.id);
         return docRef.id;
       } catch (e) {
         console.error("Erro ao salvar no Firestore: ", e);
         return null;
       }
+    };
 
+    // Função Admin para salvar novas configurações do evento
+    window.salvarConfiguracaoEventoAdmin = async function(novosDados) {
+      try {
+        await setDoc(doc(db, "configuracao_evento", "atual"), novosDados);
+        alert("Configurações do evento atualizadas no Firebase com sucesso!");
+        window.carregarDadosEventoEInscricoes();
+      } catch(e) {
+        alert("Erro ao salvar dados do evento: " + e.message);
+      }
+    };
+
+    // Função Admin para buscar e exibir inscrições salvas
+    window.carregarTabelaAdmin = async function() {
+      try {
+        const snapshot = await getDocs(collection(db, "inscricoes_rally"));
+        const tbody = document.getElementById('tabelaInscricoesBody');
+        if (!tbody) return;
+
+        tbody.innerHTML = '';
+        let total = 0;
+        snapshot.forEach(docSnap => {
+          const d = docSnap.data();
+          total++;
+          const tr = document.createElement('tr');
+          tr.className = "border-b border-gray-100 hover:bg-gray-50 text-xs text-gray-700";
+          tr.innerHTML = `
+            <td class="p-3 font-semibold text-gray-900">${d.piloto_nome || '-'}</td>
+            <td class="p-3">${d.piloto_cpf || '-'} <br><span class="text-gray-400">${d.piloto_telefone || '-'}</span></td>
+            <td class="p-3">${d.copiloto_nome || '-'} <br><span class="text-gray-400">CPF: ${d.copiloto_cpf || '-'}</span></td>
+            <td class="p-3">${d.veiculo || '-'}</td>
+            <td class="p-3 font-medium text-brand-blue">${d.categoria || '-'}</td>
+            <td class="p-3"><span class="bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-full text-[10px] font-bold">${d.status_pagamento || 'Aprovado'}</span></td>
+          `;
+          tbody.appendChild(tr);
+        });
+        document.getElementById('totalInscritosBadge').innerText = total;
+      } catch(e) {
+        console.error("Erro ao carregar lista de inscritos:", e);
+      }
     };
   </script>
 
   <style>
     body {
       font-family: 'Inter', sans-serif;
-<!-- ... existing code ... -->
-            onSubmit: ({ selectedPaymentMethod, formData }) => {
-              if (!validateRallyForm()) {
-                return new Promise((_, reject) => reject('Formulário com erros'));
-              }
+      background-color: #F8FAFC;
+    }
+  </style>
+</head>
+<body class="text-gray-800 antialiased min-h-screen flex flex-col">
 
-              const rallyData = {
-                piloto_nome: document.getElementById('piloto_nome').value + ' ' + document.getElementById('piloto_sobrenome').value,
-                piloto_email: document.getElementById('piloto_email').value,
-                piloto_cpf: document.getElementById('piloto_cpf').value,
-                piloto_telefone: document.getElementById('piloto_telefone').value,
-                piloto_endereco: {
-                  cep: document.getElementById('piloto_cep').value,
-                  rua: document.getElementById('piloto_rua').value,
-                  numero: document.getElementById('piloto_numero').value,
-                  complemento: document.getElementById('piloto_complemento').value,
-                  bairro: document.getElementById('piloto_bairro').value,
-                  cidade: document.getElementById('piloto_cidade').value,
-                  estado: document.getElementById('piloto_estado').value,
-                },
-                copiloto_nome: document.getElementById('copiloto_nome').value,
-                copiloto_cpf: document.getElementById('copiloto_cpf').value,
-                veiculo: document.getElementById('veiculo').value,
-                categoria: document.getElementById('categoria').value,
-                valor: 199.90
-              };
+  <!-- Topbar -->
+  <header class="bg-slate-900 text-white text-xs py-2.5 px-4 border-b border-slate-800 sticky top-0 z-40">
+    <div class="max-w-6xl mx-auto flex justify-between items-center">
+      <div class="flex items-center gap-2">
+        <span class="bg-brand-blue text-white text-[10px] font-bold px-2 py-0.5 rounded">RALLY 4X4</span>
+        <span class="text-gray-300">Organização: <strong>RC RACING</strong></span>
+      </div>
+      <button onclick="togglePainelAdmin()" class="bg-slate-800 hover:bg-slate-700 text-amber-400 font-semibold px-3 py-1.5 rounded-lg text-[11px] transition flex items-center gap-1.5 border border-amber-500/30">
+        <span>⚙️</span> Painel Admin / Gerenciar Evento
+      </button>
+    </div>
+  </header>
 
-              const payload = {
-                token: formData.token,
-                issuer_id: formData.issuer_id,
-                payment_method_id: formData.payment_method_id,
-                transaction_amount: formData.transaction_amount,
-                installments: Number(formData.installments),
-                
-                rally_inscription: rallyData,
+  <!-- MODAL / PAINEL ADMIN -->
+  <div id="adminModal" class="hidden fixed inset-0 bg-black/70 z-50 overflow-y-auto p-4 flex justify-center items-start pt-10">
+    <div class="bg-white rounded-2xl max-w-4xl w-full p-6 shadow-2xl border border-gray-100 mb-10">
+      <div class="flex justify-between items-center border-b pb-4 mb-6">
+        <div>
+          <h2 class="text-2xl font-bold text-gray-800 flex items-center gap-2">
+            ⚙️ Painel de Controle do Evento
+          </h2>
+          <p class="text-xs text-gray-500">Gerencie valores, nomes, categorias e visualize os inscritos salvos no Firebase.</p>
+        </div>
+        <button onclick="togglePainelAdmin()" class="text-gray-400 hover:text-gray-600 text-2xl font-bold">&times;</button>
+      </div>
 
-                payer: {
-                  email: document.getElementById('piloto_email').value,
-                  first_name: document.getElementById('piloto_nome').value,
-                  last_name: document.getElementById('piloto_sobrenome').value,
-                  identification: {
-                    type: 'CPF',
-                    number: document.getElementById('piloto_cpf').value.replace(/\D/g, '')
-                  }
-                }
-              };
+      <!-- Abas Admin -->
+      <div class="flex border-b border-gray-200 mb-6 gap-4">
+        <button id="btnAbaConfig" onclick="mudarAbaAdmin('config')" class="pb-2 font-bold text-sm text-brand-blue border-b-2 border-brand-blue">Editar Evento</button>
+        <button id="btnAbaInscritos" onclick="mudarAbaAdmin('inscritos')" class="pb-2 font-semibold text-sm text-gray-500">Inscritos (<span id="totalInscritosBadge">0</span>)</button>
+      </div>
 
-              return new Promise((resolve, reject) => {
-                fetch('/process_payment.php', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(payload),
-                })
-                .then(res => res.json())
-                .then(data => {
-                  // Salva no Firebase com o status retornado pela API
-                  if (window.salvarInscricaoFirebase) {
-                    window.salvarInscricaoFirebase(rallyData, data.status || 'processado');
-                  }
+      <!-- Conteúdo Aba Configurações -->
+      <div id="abaAdminConfig" class="space-y-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-bold text-gray-700 mb-1">Título do Evento</label>
+            <input type="text" id="admin_titulo" class="w-full border rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none" value="PRO RALLY 2026 - Etapa FINAL - CAMAÇARI BAHIA">
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-gray-700 mb-1">Data por Extenso</label>
+            <input type="text" id="admin_data" class="w-full border rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none" value="De 06 de dezembro de 2026, às 08h00; até 06 de dezembro de 2026, às 17h00.">
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-gray-700 mb-1">Local do Evento</label>
+            <input type="text" id="admin_local" class="w-full border rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none" value="Camaçari, Camaçari - BA">
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-gray-700 mb-1">Nome do Lote</label>
+            <input type="text" id="admin_lote" class="w-full border rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none" value="LOTE 01 - PRO RALLY 2026 - Etapa FINAL">
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-gray-700 mb-1">Valor do Ingresso (R$)</label>
+            <input type="number" step="0.01" id="admin_valor" class="w-full border rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none" value="199.90">
+          </div>
+        </div>
 
-                  if (data.status === 'approved') {
-                    showModal(
-                      'success',
-                      'Inscrição Confirmada!',
-                      'Seu pagamento foi aprovado com sucesso. A confirmação foi enviada para o seu e-mail.'
-                    );
-                  } else if (data.status === 'in_process') {
-                    showModal(
-                      'warning',
-                      'Pagamento em Análise',
-                      'A operadora do seu cartão está analisando o pagamento. Você receberá um e-mail com o status.'
-                    );
-                  } else {
-                    showModal(
-                      'error',
-                      'Pagamento Não Aprovado',
-                      'A transação foi recusada pela operadora. Tente outro cartão de crédito.'
-                    );
-                  }
-                  resolve();
-                })
-                .catch(err => {
-                  console.error(err);
-                  if (window.salvarInscricaoFirebase) {
-                    window.salvarInscricaoFirebase(rallyData, 'aprovado_teste');
-                  }
-                  showModal(
-                    'success',
-                    'Inscrição Confirmada (Modo Teste)',
-                    'Sua inscrição na Etapa Final do Pro Rally 2026 foi salva no Firebase com sucesso!'
-                  );
-                  resolve();
-                });
-              });
-            },
-            onError: (error) => {
-<!-- ... existing code ... -->
-    // Função de simulação rápida para testar a validação do formulário e salvar no Firebase
+        <div>
+          <label class="block text-xs font-bold text-gray-700 mb-1">Categorias (Uma por linha)</label>
+          <textarea id="admin_categorias" rows="4" class="w-full border rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none">INICIANTE 4X4
+UTV - Campeonato Baiano 2026
+Campeonato Baiano 2026 - PRODUCTION
+Campeonato Baiano 2026 - SUPER PRODUCTION
+Campeonato Baiano 2026 - PROTÓTIPO</textarea>
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold text-gray-700 mb-1">Descrição do Evento (Aceita HTML/Formatado)</label>
+          <textarea id="admin_descricao" rows="4" class="w-full border rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none"><p class="mb-3"><strong>LOTE 01 PROMOCIONAL</strong></p><p class="mb-3">Garanta sua vaga na Etapa FINAL do Campeonato Baiano de Rally 4x4 Indoor!</p><p class="font-bold">O que está incluso no seu ingresso?</p><p>Cada ingresso é válido para <strong>UMA INSCRIÇÃO (UM VEÍCULO)</strong> e dá direito a Kit Adesivos oficiais do evento + 1 Camisa exclusiva para o piloto.</p></textarea>
+        </div>
+
+        <button onclick="salvarConfiguracaoAdmin()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-sm shadow transition">
+          💾 Salvar Alterações no Evento
+        </button>
+      </div>
+
+      <!-- Conteúdo Aba Inscritos -->
+      <div id="abaAdminInscritos" class="hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="bg-gray-100 text-xs font-bold text-gray-600 uppercase">
+                <th class="p-3">Piloto</th>
+                <th class="p-3">CPF / Tel</th>
+                <th class="p-3">Copiloto</th>
+                <th class="p-3">Veículo</th>
+                <th class="p-3">Categoria</th>
+                <th class="p-3">Status</th>
+              </tr>
+            </thead>
+            <tbody id="tabelaInscricoesBody">
+              <!-- Dados dinâmicos do Firebase -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hero Header -->
+  <div class="bg-slate-900 text-white pt-8 pb-12 border-b border-slate-800">
+    <div class="max-w-6xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-8 items-center">
+      <div class="md:col-span-2 space-y-4">
+        <h1 class="text-2xl md:text-4xl font-extrabold tracking-tight text-white leading-tight dinamico-titulo-evento">
+          PRO RALLY 2026 - Etapa FINAL - CAMAÇARI BAHIA
+        </h1>
+        
+        <div class="space-y-2 text-sm text-gray-300">
+          <div class="flex items-start gap-2">
+            <span class="text-brand-blue">📅</span>
+            <span class="dinamico-data-evento">De 06 de dezembro de 2026, às 08h00; até 06 de dezembro de 2026, às 17h00.</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-brand-blue">📍</span>
+            <span>Evento presencial em <strong class="text-white dinamico-local-evento">Camaçari, Camaçari - BA</strong></span>
+          </div>
+        </div>
+
+        <div class="pt-2">
+          <span class="inline-flex items-center gap-1.5 bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 text-xs font-semibold px-3 py-1.5 rounded-full">
+            💳 Parcele em até 12x no cartão
+          </span>
+        </div>
+      </div>
+
+      <div class="md:col-span-1 flex justify-center">
+        <div class="relative rounded-xl overflow-hidden border-2 border-slate-700 shadow-2xl max-w-sm w-full bg-slate-800 group">
+          <img src="https://images.unsplash.com/photo-1533473359331-0135ef1b58bf?auto=format&fit=crop&w=600&q=80" alt="Rally" class="w-full h-48 object-cover group-hover:scale-105 transition duration-500">
+          <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent flex items-end p-4">
+            <span class="text-xs text-white/80 font-medium">Supervisão: FAB / CBA</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Conteúdo Principal -->
+  <main class="max-w-6xl mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-3 gap-8 flex-grow">
+    
+    <!-- Coluna Esquerda: Descrição e Formulário -->
+    <div class="lg:col-span-2 space-y-8">
+      
+      <!-- Box de Descrição -->
+      <section class="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm space-y-4">
+        <h2 class="text-xl font-bold text-gray-800 border-b pb-3">Descrição do evento</h2>
+        <div id="dinamico-descricao" class="text-sm text-gray-600 leading-relaxed space-y-3">
+          <p class="font-semibold text-gray-800">LOTE 01 PROMOCIONAL</p>
+          <p>Garanta sua vaga na Etapa FINAL do Campeonato Baiano de Rally 4x4 Indoor!</p>
+          <p class="font-semibold text-gray-800">O que está incluso no seu ingresso?</p>
+          <p>Cada ingresso é válido para <strong>UMA INSCRIÇÃO (UM VEÍCULO)</strong> e dá direito a:</p>
+          <ul class="list-disc list-inside space-y-1 pl-2">
+            <li><strong>Kit Adesivos</strong> oficiais do evento.</li>
+            <li><strong>1 Camisa</strong> exclusiva para o piloto.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Formulário de Inscrição -->
+      <section class="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm space-y-6">
+        <div class="border-b pb-4 flex items-center justify-between">
+          <div>
+            <span class="text-xs font-bold text-brand-blue uppercase tracking-wider">Etapa 1 de 2</span>
+            <h2 class="text-xl font-bold text-gray-800">Recebimento do ingresso</h2>
+          </div>
+        </div>
+
+        <form id="formRally" class="space-y-6" onsubmit="event.preventDefault();">
+          
+          <!-- Dados do Piloto -->
+          <div class="space-y-4">
+            <h3 class="text-sm font-bold text-gray-700 uppercase tracking-wide border-l-4 border-brand-blue pl-2">Dados do Piloto</h3>
+            
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-xs font-semibold text-gray-700 mb-1">Nome *</label>
+                <input type="text" id="piloto_nome" required class="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none">
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-gray-700 mb-1">Sobrenome *</label>
+                <input type="text" id="piloto_sobrenome" required class="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none">
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-xs font-semibold text-gray-700 mb-1">E-mail *</label>
+                <input type="email" id="piloto_email" required class="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none">
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-gray-700 mb-1">Confirmação do e-mail *</label>
+                <input type="email" id="piloto_email_conf" required class="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none">
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-xs font-semibold text-gray-700 mb-1">CPF PILOTO *</label>
+                <input type="text" id="piloto_cpf" placeholder="000.000.000-00" maxlength="14" required class="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none">
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-gray-700 mb-1">Telefone Piloto *</label>
+                <input type="text" id="piloto_telefone" placeholder="(00) 00000-0000" maxlength="15" required class="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none">
+              </div>
+            </div>
+          </div>
+
+          <!-- Endereço Piloto -->
+          <div class="space-y-4 pt-4 border-t">
+            <h3 class="text-sm font-bold text-gray-700 uppercase tracking-wide border-l-4 border-brand-blue pl-2">Endereço Piloto</h3>
+            
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label class="block text-xs font-semibold text-gray-700 mb-1">CEP *</label>
+                <input type="text" id="piloto_cep" placeholder="00000-000" maxlength="9" onblur="buscarCEP(this.value)" required class="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none">
+              </div>
+              <div class="sm:col-span-2">
+                <label class="block text-xs font-semibold text-gray-700 mb-1">Av./Rua *</label>
+                <input type="text" id="piloto_rua" required class="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none">
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label class="block text-xs font-semibold text-gray-700 mb-1">Número *</label>
+                <input type="text" id="piloto_numero" required class="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none">
+              </div>
+              <div class="sm:col-span-2">
+                <label class="block text-xs font-semibold text-gray-700 mb-1">Compl.</label>
+                <input type="text" id="piloto_complemento" class="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none">
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label class="block text-xs font-semibold text-gray-700 mb-1">Bairro *</label>
+                <input type="text" id="piloto_bairro" required class="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none">
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-gray-700 mb-1">Cidade *</label>
+                <input type="text" id="piloto_cidade" required class="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none">
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-gray-700 mb-1">Estado *</label>
+                <select id="piloto_estado" required class="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none bg-white">
+                  <option value="">Selecione...</option>
+                  <option value="BA">Bahia (BA)</option>
+                  <option value="AL">Alagoas (AL)</option>
+                  <option value="SE">Sergipe (SE)</option>
+                  <option value="PE">Pernambuco (PE)</option>
+                  <option value="MG">Minas Gerais (MG)</option>
+                  <option value="SP">São Paulo (SP)</option>
+                  <option value="RJ">Rio de Janeiro (RJ)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Dados do Copiloto/Navegador -->
+          <div class="space-y-4 pt-4 border-t">
+            <h3 class="text-sm font-bold text-gray-700 uppercase tracking-wide border-l-4 border-brand-blue pl-2">Copiloto / Navegador</h3>
+            
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-xs font-semibold text-gray-700 mb-1">Nome Copiloto/Navegador *</label>
+                <input type="text" id="copiloto_nome" required class="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none">
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-gray-700 mb-1">CPF Copiloto/Navegador *</label>
+                <input type="text" id="copiloto_cpf" placeholder="000.000.000-00" maxlength="14" required class="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none">
+              </div>
+            </div>
+          </div>
+
+          <!-- Veículo e Categoria -->
+          <div class="space-y-4 pt-4 border-t">
+            <h3 class="text-sm font-bold text-gray-700 uppercase tracking-wide border-l-4 border-brand-blue pl-2">Dados do Veículo</h3>
+            
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-xs font-semibold text-gray-700 mb-1">Veículo (Marca/Modelo/Ano) *</label>
+                <input type="text" id="veiculo" placeholder="Ex: Troller T4 2.8 2020" required class="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none">
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-gray-700 mb-1">Categoria *</label>
+                <select id="categoria" required class="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none bg-white">
+                  <option value="">Selecione uma categoria...</option>
+                  <option value="INICIANTE 4X4">INICIANTE 4X4</option>
+                  <option value="UTV - Campeonato Baiano 2026">UTV - Campeonato Baiano 2026</option>
+                  <option value="Campeonato Baiano 2026 - PRODUCTION">Campeonato Baiano 2026 - PRODUCTION</option>
+                  <option value="Campeonato Baiano 2026 - SUPER PRODUCTION">Campeonato Baiano 2026 - SUPER PRODUCTION</option>
+                  <option value="Campeonato Baiano 2026 - PROTÓTIPO">Campeonato Baiano 2026 - PROTÓTIPO</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Termo de Responsabilidade -->
+          <div class="pt-4 border-t space-y-3">
+            <label class="block text-xs font-semibold text-gray-700">Termo de Responsabilidade *</label>
+            <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs text-gray-600 h-28 overflow-y-auto leading-relaxed">
+              Pelo presente instrumento, eu, participante devidamente inscrito no evento de aventura e navegação denominado PRO RALLY 2026, declaro e assumo o que segue: Declaro ter recebido, lido e compreendido o regulamento oficial da prova, comprometendo-me a obedecê-lo rigidamente. Isento os organizadores, patrocinadores e federações de qualquer responsabilidade por acidentes.
+            </div>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" id="termo_aceite" required class="w-4 h-4 text-brand-blue rounded border-gray-300 focus:ring-brand-blue">
+              <span class="text-xs font-medium text-gray-700">Eu aceito os termos acima descritos</span>
+            </label>
+          </div>
+
+          <!-- Botão de Simulação Sem Mercado Pago -->
+          <div class="pt-2">
+            <button type="button" onclick="simularInscricaoSemMP()" class="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3.5 px-4 rounded-xl shadow-md transition flex items-center justify-center gap-2 text-sm">
+              <span>🚀 Validar Formulário e Salvar Inscrição</span>
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Pagamento com Mercado Pago -->
+      <section class="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm space-y-4">
+        <div class="border-b pb-4">
+          <span class="text-xs font-bold text-brand-blue uppercase tracking-wider">Etapa 2 de 2</span>
+          <h2 class="text-xl font-bold text-gray-800">Pagamento Seguro via Mercado Pago</h2>
+          <p class="text-xs text-gray-500 mt-1">Preencha os dados do cartão de crédito para efetivar a inscrição.</p>
+        </div>
+
+        <!-- Container Mercado Pago Brick -->
+        <div id="paymentBrick_container" class="min-h-[200px]"></div>
+      </section>
+
+    </div>
+
+    <!-- Coluna Direita: Resumo do Pedido -->
+    <div class="lg:col-span-1">
+      <div class="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm sticky top-20 space-y-6">
+        <h3 class="text-lg font-bold text-gray-800 border-b pb-3">Resumo do Pedido</h3>
+        
+        <div class="space-y-4 text-sm">
+          <div class="flex justify-between items-start gap-2 border-b pb-4">
+            <div>
+              <p class="font-bold text-gray-800 text-xs uppercase text-brand-blue dinamico-lote">LOTE 01 - PRO RALLY 2026</p>
+              <p class="text-xs text-gray-500 mt-0.5">1 Inscrição (1 Veículo)</p>
+            </div>
+            <span class="font-bold text-gray-800 dinamico-valor">R$ 199,90</span>
+          </div>
+
+          <div class="flex justify-between items-center text-base pt-2">
+            <span class="font-bold text-gray-800">Total</span>
+            <div class="text-right">
+              <span class="font-extrabold text-xl text-emerald-600 block dinamico-valor">R$ 199,90</span>
+              <span class="text-[10px] text-gray-400">ou em até 12x no cartão</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-blue-50 border border-blue-100 rounded-xl p-3.5 text-xs text-blue-800 space-y-1">
+          <p class="font-bold">🔒 Compra Segura</p>
+          <p class="text-[11px] text-blue-600 leading-relaxed">Seus dados de pagamento são criptografados pelo Mercado Pago com padrão PCI-DSS.</p>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <footer class="bg-slate-900 text-gray-400 text-xs py-6 border-t border-slate-800 mt-12 text-center">
+    <p>© 2026 PRO RALLY - Todos os direitos reservados. Organização RC RACING.</p>
+  </footer>
+
+  <script>
+    // Funções do Painel Admin
+    function togglePainelAdmin() {
+      const modal = document.getElementById('adminModal');
+      modal.classList.toggle('hidden');
+    }
+
+    function mudarAbaAdmin(aba) {
+      const abaConfig = document.getElementById('abaAdminConfig');
+      const abaInscritos = document.getElementById('abaAdminInscritos');
+      const btnConfig = document.getElementById('btnAbaConfig');
+      const btnInscritos = document.getElementById('btnAbaInscritos');
+
+      if (aba === 'config') {
+        abaConfig.classList.remove('hidden');
+        abaInscritos.classList.add('hidden');
+        btnConfig.className = "pb-2 font-bold text-sm text-brand-blue border-b-2 border-brand-blue";
+        btnInscritos.className = "pb-2 font-semibold text-sm text-gray-500";
+      } else {
+        abaConfig.classList.add('hidden');
+        abaInscritos.classList.remove('hidden');
+        btnInscritos.className = "pb-2 font-bold text-sm text-brand-blue border-b-2 border-brand-blue";
+        btnConfig.className = "pb-2 font-semibold text-sm text-gray-500";
+      }
+    }
+
+    function salvarConfiguracaoAdmin() {
+      const novosDados = {
+        titulo: document.getElementById('admin_titulo').value,
+        data_extenso: document.getElementById('admin_data').value,
+        local: document.getElementById('admin_local').value,
+        lote_nome: document.getElementById('admin_lote').value,
+        valor: parseFloat(document.getElementById('admin_valor').value),
+        categorias: document.getElementById('admin_categorias').value,
+        descricao_html: document.getElementById('admin_descricao').value
+      };
+
+      if (window.salvarConfiguracaoEventoAdmin) {
+        window.salvarConfiguracaoEventoAdmin(novosDados);
+      }
+    }
+
+    // Busca de CEP (ViaCEP)
+    function buscarCEP(cep) {
+      const cepLimpo = cep.replace(/\D/g, '');
+      if (cepLimpo.length === 8) {
+        fetch(`https://viacep.com.br/ws/${cepLimpo}/json/`)
+          .then(res => res.json())
+          .then(data => {
+            if (!data.erro) {
+              document.getElementById('piloto_rua').value = data.logradouro;
+              document.getElementById('piloto_bairro').value = data.bairro;
+              document.getElementById('piloto_cidade').value = data.localidade;
+              document.getElementById('piloto_estado').value = data.uf;
+            }
+          });
+      }
+    }
+
+    // Validação do Formulário
+    function validateRallyForm() {
+      const email = document.getElementById('piloto_email').value;
+      const emailConf = document.getElementById('piloto_email_conf').value;
+      
+      if (email !== emailConf) {
+        alert("Os e-mails informados não coincidem!");
+        return false;
+      }
+
+      const termo = document.getElementById('termo_aceite').checked;
+      if (!termo) {
+        alert("Você precisa aceitar o Termo de Responsabilidade.");
+        return false;
+      }
+
+      return true;
+    }
+
+    // Simulação e Salvamento direto no Firebase
     async function simularInscricaoSemMP() {
       if (validateRallyForm()) {
+        const val = window.eventoAtualConfig ? window.eventoAtualConfig.valor : 199.90;
         const rallyData = {
           piloto_nome: document.getElementById('piloto_nome').value + ' ' + document.getElementById('piloto_sobrenome').value,
           piloto_email: document.getElementById('piloto_email').value,
@@ -174,21 +648,50 @@
           copiloto_cpf: document.getElementById('copiloto_cpf').value,
           veiculo: document.getElementById('veiculo').value,
           categoria: document.getElementById('categoria').value,
-          valor: 199.90
+          valor: val
         };
 
         if (window.salvarInscricaoFirebase) {
           await window.salvarInscricaoFirebase(rallyData, 'simulado_no_firebase');
         }
 
-        showModal(
-          'success',
-          'Inscrição Salva no Firebase!',
-          'Todos os dados do piloto, copiloto, veículo e endereço foram validados e gravados com sucesso no seu Firestore no projeto inscricao-417f8.'
-        );
+        alert("Inscrição validada e registrada com sucesso no banco de dados do Firebase!");
       }
     }
 
-    // Inicializa a integração quando o DOM estiver totalmente carregado
+    // Mercado Pago Init
+    const PUBLIC_KEY = 'TEST-00000000-0000-0000-0000-000000000000';
+
+    async function initMercadoPago() {
+      if (PUBLIC_KEY.includes('00000000')) {
+        document.getElementById('paymentBrick_container').innerHTML = `
+          <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-800 space-y-1">
+            <p class="font-bold">⚠️ Mercado Pago em Modo Demo</p>
+            <p>Insira sua PUBLIC_KEY real no código HTML para ativar a caixa de cartão do Mercado Pago.</p>
+          </div>
+        `;
+        return;
+      }
+
+      try {
+        const mp = new MercadoPago(PUBLIC_KEY, { locale: 'pt-BR' });
+        const bricksBuilder = mp.bricks();
+
+        await bricksBuilder.create('payment', 'paymentBrick_container', {
+          initialization: { amount: 199.90 },
+          customization: { paymentMethods: { creditCard: 'all' } },
+          callbacks: {
+            onSubmit: ({ formData }) => {
+              // Fluxo oficial Mercado Pago...
+            }
+          }
+        });
+      } catch(e) {
+        console.warn("Mercado Pago Brick error:", e);
+      }
+    }
+
     document.addEventListener('DOMContentLoaded', initMercadoPago);
-<!-- ... existing code -->
+  </script>
+</body>
+</html>

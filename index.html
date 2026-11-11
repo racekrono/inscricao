@@ -750,15 +750,22 @@ Campeonato Baiano 2026 - PROTÓTIPO</textarea>
         const mp = new MercadoPago(PUBLIC_KEY, { locale: 'pt-BR' });
         const bricksBuilder = mp.bricks();
 
-        await bricksBuilder.create('payment', 'paymentBrick_container', {
-          initialization: { amount: 199.90 },
-          customization: { paymentMethods: { creditCard: 'all' } },
-          callbacks: {
-            onSubmit: ({ formData }) => {
-              // Fluxo oficial Mercado Pago...
-            }
-          }
-        });
+        // Substitua a chamada atual do bricksBuilder.create por esta:
+await bricksBuilder.create('payment', 'paymentBrick_container', {
+  initialization: { amount: 199.90 },
+  customization: { paymentMethods: { creditCard: 'all' } },
+  callbacks: {
+    onReady: () => {
+      console.log('Brick de Pagamento carregado com sucesso!');
+    },
+    onSubmit: ({ formData }) => {
+      // Fluxo de envio do pagamento...
+    },
+    onError: (error) => {
+      console.error('Erro no Brick de Pagamento:', error);
+    }
+  }
+});
       } catch(e) {
         console.warn("Mercado Pago Brick error:", e);
       }
